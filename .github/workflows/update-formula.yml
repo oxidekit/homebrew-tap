@@ -1,0 +1,71 @@
+name: Update Formula
+
+on:
+  repository_dispatch:
+    types: [update-formula]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to update (e.g., v0.1.0)'
+        required: true
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            VERSION="${{ github.event.client_payload.version }}"
+          else
+            VERSION="${{ github.event.inputs.version }}"
+          fi
+          # Remove 'v' prefix if present
+          VERSION="${VERSION#v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Updating to version: $VERSION"
+
+      - name: Download release assets and compute checksums
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          BASE_URL="https://github.com/oxidekit/oxidepm/releases/download/v${VERSION}"
+
+          # Download and compute checksums
+          for target in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu; do
+            curl -fsSL "${BASE_URL}/oxidepm-${target}.tar.gz" -o "${target}.tar.gz"
+            sha256sum "${target}.tar.gz" | cut -d' ' -f1 > "${target}.sha256"
+          done
+
+      - name: Update formula
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Read checksums
+          SHA_AARCH64_DARWIN=$(cat aarch64-apple-darwin.sha256)
+          SHA_X86_64_DARWIN=$(cat x86_64-apple-darwin.sha256)
+          SHA_AARCH64_LINUX=$(cat aarch64-unknown-linux-gnu.sha256)
+          SHA_X86_64_LINUX=$(cat x86_64-unknown-linux-gnu.sha256)
+
+          # Update formula
+          sed -i "s/version \".*\"/version \"${VERSION}\"/" Formula/oxidepm.rb
+          sed -i "s/PLACEHOLDER_AARCH64_DARWIN/${SHA_AARCH64_DARWIN}/" Formula/oxidepm.rb
+          sed -i "s/PLACEHOLDER_X86_64_DARWIN/${SHA_X86_64_DARWIN}/" Formula/oxidepm.rb
+          sed -i "s/PLACEHOLDER_AARCH64_LINUX/${SHA_AARCH64_LINUX}/" Formula/oxidepm.rb
+          sed -i "s/PLACEHOLDER_X86_64_LINUX/${SHA_X86_64_LINUX}/" Formula/oxidepm.rb
+
+          # Also update any existing sha256 values (for subsequent updates)
+          sed -i "s/sha256 \"[a-f0-9]\{64\}\" # aarch64-darwin/sha256 \"${SHA_AARCH64_DARWIN}\" # aarch64-darwin/" Formula/oxidepm.rb
+          sed -i "s/sha256 \"[a-f0-9]\{64\}\" # x86_64-darwin/sha256 \"${SHA_X86_64_DARWIN}\" # x86_64-darwin/" Formula/oxidepm.rb
+          sed -i "s/sha256 \"[a-f0-9]\{64\}\" # aarch64-linux/sha256 \"${SHA_AARCH64_LINUX}\" # aarch64-linux/" Formula/oxidepm.rb
+          sed -i "s/sha256 \"[a-f0-9]\{64\}\" # x86_64-linux/sha256 \"${SHA_X86_64_LINUX}\" # x86_64-linux/" Formula/oxidepm.rb
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/oxidepm.rb
+          git commit -m "Update oxidepm to v${{ steps.version.outputs.version }}"
+          git push
